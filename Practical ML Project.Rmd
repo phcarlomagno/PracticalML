@@ -1,0 +1,215 @@
+---
+title: "Practical Machine Learning Project"
+date: "Carlomagno Anastacio"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = getwd())  
+```
+
+###INTRODUCTION
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+###OBJECTIVE
+From the Coursera website:  
+*The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.*
+
+***
+
+### I. LOADING NEEDED PACKAGES
+```{r message=FALSE,warning=FALSE}
+library(ggplot2)
+library(caret)
+library(tidyr)
+library(rattle)
+```
+
+*** 
+### II. DATA EXPLORATION
+Load the training and test data.
+```{r}
+trainSet <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"), na.strings = NA,header=TRUE,sep=",")
+testSet  <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"), na.strings = NA,header=TRUE,sep=",")
+```
+
+####A. Get data layout
+```{r}
+str(trainSet)
+str(testSet)
+```
+**POINT:** We can see that there are NA values, #DIV/0! values, and variables that are factors and variables that are numeric (integer or floating point)  
+
+####B. Remove unnecessary fields
+The instructions say that only data from accelerometers on the belt, forearm, arm, and dumbell are used.  So, remove fields that would not contribute to the outcome.
+```{r}
+trainSet <- trainSet[,-c(1:7)]
+testSet <- testSet[,-c(1:7)]
+```
+
+####C. Check for invalid data in the remaining observations
+```{r}
+##FOR RAW TRAINING SET##
+sum(which(trainSet =="#DIV/0!", arr.ind = TRUE))  #check if there are invalid numbers
+sum(which(trainSet =="NaN", arr.ind = TRUE))      #check if there are invalid numbers
+sum(is.na(trainSet))                              #check if there are NA values
+
+##FOR TESTING SET##
+sum(which(testSet =="#DIV/0!", arr.ind = TRUE))   #check if thre are invalid numbers
+sum(which(testSet =="NaN", arr.ind = TRUE))       #check if thre are invalid numbers
+sum(is.na(testSet))                               #check if there are NA values
+```
+**POINT:** Training set has '#DIV/0!' and 'NA'; test set only has'NA'
+
+####D. Clean the data to only include those observations that are complete
+Clean the training set
+```{r}
+trainSetClean <- trainSet[ , colSums(is.na(trainSet)) == 0]     #subset valid fields
+trainSetClean <- trainSetClean[complete.cases(trainSetClean),]  #just to make sure
+sum(which(trainSetClean =="#DIV/0!", arr.ind = TRUE))           #must be 0
+sum(is.na(trainSetClean))                                       #must be 0
+```
+
+Clean the test set
+```{r}
+testSetClean <- testSet[ , colSums(is.na(testSet)) == 0]        #subset valid fields
+testSetClean <- testSetClean[complete.cases(testSetClean),]     #just to make sure
+sum(which(testSetClean =="#DIV/0!", arr.ind = TRUE))            #must be 0
+sum(is.na(testSetClean))                                        #must be 0
+```
+
+####E. Use variables with some variance
+```{r}
+zeroVariance <- nearZeroVar(trainSetClean, saveMetrics = TRUE)
+trainSetClean <- trainSetClean[,zeroVariance$nzv== FALSE]
+zeroVariance <- nearZeroVar(testSetClean, saveMetrics = TRUE)
+testSetClean <- testSetClean[,zeroVariance$nzv== FALSE]
+```
+
+***
+
+### III. CREATE DATA PARTITION
+Create a validation set from the training set (30-70 split)
+```{r}
+set.seed(98765)
+inBuild <- createDataPartition(y=trainSetClean$classe,p=0.7,list=FALSE)
+validSetClean <- trainSetClean[-inBuild,]   
+trainSetClean <- trainSetClean[inBuild,]    
+dim(trainSetClean)
+dim(validSetClean)
+```
+
+*** 
+
+###IV. MODEL BUILDING
+This section contains the result of training the data using: (1)Classification Trees, (2) Boosting, and (3) Random Forest (simplest -> complex).  
+
+5-fold Cross validation is used because it consumes less computational resources to mitigate overfitting and evaluate each model. All fields are to be used as predictors.
+
+####A. CLASSIFICATION TREES
+Trees are first used because they are easily interpreted.
+```{r}
+#TRAIN THE DATA
+modFitC3 <-train(classe ~ .,
+                 data=trainSetClean,
+                 method='rpart',
+                 trControl = trainControl(method="cv",number=5))
+
+#PREDICT USING VALIDATION
+predictC3 <- predict(modFitC3,validSetClean)
+
+#STORE PERFORMANCE
+confMatC3 <- confusionMatrix(validSetClean$classe,predictC3)
+```
+
+
+####B. BOOSTING
+We use boosting since all variables are to be used, let us try to make stronger predictors out of them.
+```{r}
+#TRAIN THE DATA
+modFitBoost <-train(classe ~ .,
+                 data=trainSetClean,
+                 method='gbm',
+                 trControl = trainControl(method="cv",number=5),
+                 verbose=FALSE)
+
+#PREDICT USING VALIDATION
+predictBoost <- predict(modFitBoost,validSetClean)  #predict against the validation
+
+#STORE PERFORMANCE
+confMatBoost <- confusionMatrix(validSetClean$classe,predictBoost)
+```
+
+####C. RANDOM FOREST
+Going to a more accurate but with a complex interpretation, let us try using a random forest.
+```{r}
+#TRAIN THE DATA
+modFitRForest <-train(classe ~ .,
+                    data=trainSetClean,
+                    method='rf',
+                    trControl = trainControl(method="cv",number=5),
+                    verbose=FALSE)
+
+#PREDICT USING VALIDATION
+predictRForest <- predict(modFitRForest,validSetClean)
+
+#STORE PERFORMANCE
+confMatRForest <- confusionMatrix(validSetClean$classe,predictRForest)
+```
+
+***
+
+###IV. DISPLAY AND COMPARE RESULTS
+####A. Compare the confusion matrices for the most accurate prediction
+```{r}
+confMatC3$table                         #Classification Trees
+confMatBoost$table                      #Boosting
+confMatRForest$table                    #Random Forest
+```
+
+####B. Next, compare the statistical values:
+Below is a comparison of the relevant values used to choose between predictors: Accuracy for correctness, Kappa for agreement, and Sample Error for the error rate
+
+Model | Accuracy | Kappa |Sample Error
+------|----------|-------|-----------
+Classification Trees | `r confMatC3$overall[1]` | `r confMatC3$overall[2]` | `r 1- confMatC3$overall[1]`
+Boosting | `r confMatBoost$overall[1]` | `r confMatBoost$overall[2]` | `r 1- confMatBoost$overall[1]`
+**Random Forest** | **`r confMatRForest$overall[1]`** | **`r confMatRForest$overall[2]`** | **`r 1- confMatRForest$overall[1]`**
+
+**POINT:** From the results above, we can see that the **Random Forest** model is the most accurate among the 3 candidates.  Now we try to use the test data for prediction.
+
+***
+
+###V. APPLY TO THE TEST DATA
+With the model selected, we try to implement it to the test set
+```{r}
+predict(modFitRForest,newdata=testSetClean)
+```
+
+***
+
+###VI. CONCLUSION
+Taking accuracy as the main definition of a 'good' model fit, **Random Forest** is the winner with **99%**.  This is followed by Boosting with 96%, then Classification Trees with almost 50%.  
+
+Also, considering the original data where variables are highly correlated and missing values exist, the random forest model would the best fit for this kind of data structure.
+
+***
+
+### VII. APPENDIX
+####A. Confusion Matrix Plots
+The following plots show a visualization on the accuracy of the models used
+```{r}
+par(mfrow=c(1,3))
+plot(confMatC3$table, main="Classification Tree")
+plot(confMatBoost$table, main="Boosting")
+plot(confMatRForest$table, main="Random Forest")
+```
+
+####B. References
+[Plot the Confusion Matrix](https://stackoverflow.com/questions/37897252/plot-confusion-matrix-in-r-using-ggplot)  
+[Boosting vs Random Forest](https://discuss.analyticsvidhya.com/t/what-is-the-fundamental-difference-between-randomforest-and-gradient-boosting-algorithms/2341/3)  
+[Cross Validation](https://machinelearningmastery.com/how-to-estimate-model-accuracy-in-r-using-the-caret-package/)  
+[Interpreting Kappa](http://www.pmean.com/definitions/kappa.htm)  
+
+End of report
